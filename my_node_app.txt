@@ -1,0 +1,150 @@
+ Node.js Simple App CI/CD Pipeline Guide
+We are going to create a Node.js application using a simple HTTP server and then using Git, Jenkins, and Docker, we will dockerize the project and push the image to Docker Hub. This entire process will be automated using the Jenkins Pipeline script.
+
+----------------------------------------------------------------------
+CREATE A SIMPLE NODE.JS PROJECT
+1. Create a folder:
+mkdir my_node_app
+cd my_node_app
+
+2. Create server.js:
+const http = require('http');
+const server = http.createServer((req, res) => {
+    res.end("Hello from Node App using Jenkins Pipeline!");
+});
+server.listen(3000, () => {
+    console.log("Server running on port 3000");
+});
+
+3. Initialize npm:
+npm init -y
+
+4. Update package.json if below is not present in it:
+"scripts": { "start": "node server.js" }
+
+----------------------------------------------------------------------
+CREATE A DOCKERFILE AND TEST LOCALLY
+1. Create Dockerfile:
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm","start"]
+
+2. Build Image:
+docker build -t my_node_app .
+
+3. Test Container:
+docker run -p 10000:3000 my_node_app:latest
+
+4. Visit localhost:10000
+
+----------------------------------------------------------------------
+CREATE A GIT REPO AND PUSH THE CODE
+1. open the node project folder
+2. * git init
+   * git branch -m main
+   * git add .
+   * git commit -m "Initial Commit"
+3. Goto github.com -> create repo -> name: my_node_app
+4. copy the ssh url of the repo and add it into the local repo -> git remote add origin <url>
+5. SSH KEY GEN AND ADDING IT TO GITHUB
+ * ssh-keygen -t ed25519 -C "<your_mail_id>"
+ * cat ~/.ssh/id_ed25519.pub (copy this key)
+ * goto github.com -> settings -> ssh and gpg keys -> add the key
+6. push the code to github -> git push origin main
+
+----------------------------------------------------------------------
+CONFIGURE DOCKER HUB CREDENTIALS
+1. Login to Docker Hub
+2. create a new repo: my_node_app
+3. Add Docker Hub Credentials to Jenkins
+* Goto jenkins -> Manage Jenkins -> Credentials -> Global -> Add credentials 
+	choose: kind: username and password
+		ID: dockerhub
+		username: <dockerhub_username>
+		password: <dockerhub_password>
+
+----------------------------------------------------------------------
+INSTALL THESE PLUGINS IF NOT ALREADY
+
+1. Goto Jenkins -> Manage Jenkins -> Plugins 
+* Git Plugin
+* Pipeline
+* Docker Pipeline
+* Credential Binding
+2. Restart jenkins -> sudo systemctl restart jenkins 
+
+----------------------------------------------------------------------
+CONFIGURE JENKINS SSH ACCESS TO GITHUB
+1. Jenkins must clone your repo using SSH
+* switch to jenkins user-> sudo -su jenkins
+* Generate SSH key -> ssh-keygen -t ed25519 -C "jenkins@server"
+* display the public key -> cat ~/.ssh/id_ed25519.pub -> copy the key and add to github 
+2. Add Github to known Hosts
+* ssh-keyscan github.com >> ~/.ssh/known_hosts
+* chmod 600 ~/.ssh/known_hosts
+3. Test the connection to github -> ssh -T git@github.com
+
+----------------------------------------------------------------------
+CREATE A JENKINS FILE AND ADD TO YOUR GITHUB REPO
+1. open the  project folder
+2. create a "jenkinsfile" and add the below content
+
+pipeline {
+    agent any
+    environment {
+        DOCKERHUB_CRED = credentials('dockerhub')
+        IMAGE_NAME = "<dockerhub_username>/my_node_app"
+    }
+    stages {
+        stage('checkout') {
+            steps { git url: '<github_repo_ssh_url>', branch: 'main' }
+        }
+        stage('Build Docker Image') {
+            steps {
+                script { dockerImage = docker.build("${IMAGE_NAME}:latest") }
+            }
+        }
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub') {
+                        dockerImage.push()
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success { echo "Pipeline Successful" }
+        failure { echo "Pipeline Failed" }
+        always { deleteDir() }
+    }
+}
+
+git add .
+git commit -m "Added jenkinsfile"
+git push origin main
+
+----------------------------------------------------------------------
+ADD JENKINS TO DOCKER GROUP
+1. This is needed because jenkins need permission to execute docker commands
+-> sudo usermod -aG docker jenkins
+-> sudo systemctl restart docker
+-> sudo systemctl restart jenkins
+
+----------------------------------------------------------------------
+CREATE JENKINS PIPELINE JOB
+1. Goto Jenkins -> New Item -> Pipeline -> OK
+2. Configure Pipeline -> * pipeline -> choose from SCM
+			 * SCM -> Git
+			 * Repo Url: <ssh_url_of_github_repo>
+			 * script path: jenkinsfile
+	Save -> Build Now
+
+----------------------------------------------------------------------
+VERIFY IN DOCKERHUB
+* Goto DockerHub Repo and look for the image pushed.
